@@ -1,9 +1,5 @@
 
 #include <cpp_redis/cpp_redis>
-#include <list>
-#include <set>
-#include <map>
-#include <utility> // for make_pair
 #include <future>  // for std::future<cpp_redis::reply>
 #include <cstdlib>
 #include <iostream>
@@ -69,11 +65,12 @@ int main(){
 
     cpp_redis::redis_client client;
     // создаю клиент для дальнейших подключений
-    //cpp_redis::client client;                       
-    client.connect("127.0.0.1", 6379, [](const std::string& host, std::size_t port, cpp_redis::client::connect_state status) {  // соединяю с сервером
-        if (status == cpp_redis::client::connect_state::dropped) {
-            std::cout << "client disconnected from " << host << ":" << port << std::endl;
-    }});
+    //client.connect("127.0.0.1", 6379, [](const std::string& host, std::size_t port, cpp_redis::client::connect_state status) {  // соединяю с сервером
+    //    if (status == cpp_redis::redis_client::connect_state::dropped) {
+    //        std::cout << "client disconnected from " << host << ":" << port << std::endl;
+    //}});
+    client.connect("127.0.0.1", 6379);
+
     // получаю список всех ключей
     std::future<cpp_redis::reply> my_reply = client.keys("*"); 
     // вношу изменения т.к. все в очереди
@@ -94,82 +91,91 @@ int main(){
             }
             case 1:
             {
-                std::list<std::string> my_list;
                 std::vector<cpp_redis::reply> list_fields;
                 client.lrange(temp.as_string(),0 , -1, reply);
                 client.sync_commit();
                 list_fields = answer.as_array();
+                // объект в виде массива
+                json j_list;
                 for(auto &list_el : list_fields) {
-                    my_list.push_back(list_el.as_string());
+                    j_list.push_back(list_el.as_string());
                 }
-                json j_list(my_list);
                 s = db->Put(rocksdb::WriteOptions(), temp.as_string(), j_list.dump());
                 assert(s.ok());
+                // итерация по значениям в массиве json
+                for (json::iterator it = j_list.begin(); it != j_list.end(); ++it) {
+                    std::cout << *it << std::endl;
+                }
                 break;
             }
             case 2:
             {
-                std::set<std::string> my_set;
-                std::size_t counter = 0;
-                client.scard(temp.as_string(), reply);
-                client.sync_commit();
-                counter = answer.as_integer();
+                std::vector<cpp_redis::reply> set_fields;
                 std::future<cpp_redis::reply> temp_reply = client.smembers(temp.as_string());
                 client.sync_commit();
-                list_values = (temp_reply.get()).as_array();
-                for(auto &list_el : list_values) {
-                    my_set.insert(list_el.as_string());
+                set_fields = (temp_reply.get()).as_array();
+                json j_set;
+                for(auto &set_el : set_fields) {
+                    j_set.push_back(set_el.as_string());
                 }
-                json j_set(my_set);
                 s = db->Put(rocksdb::WriteOptions(), temp.as_string(), j_set.dump());
                 assert(s.ok());
+                // итерация по значениям в массиве json
+                for (json::iterator it = j_set.begin(); it != j_set.end(); ++it) {
+                    std::cout << *it << std::endl;
+                }
                 break;
             }
             case 3: 
             {
-                std::map<std::string, std::string> my_map;
                 std::vector<cpp_redis::reply> hash_fields;
                 client.hgetall(temp.as_string(), reply);
                 client.sync_commit();
                 hash_fields = answer.as_array();
+                json j_hash;
                 for(std::size_t i = 0; i < hash_fields.size();){
-                    my_map.insert(std::make_pair(hash_fields[i].as_string(), hash_fields[i + 1].as_string()));
+                    j_hash[hash_fields[i].as_string()] =  hash_fields[i + 1].as_string();
                     i += 2;
                 }
-                json j_map(my_map);
-                s = db->Put(rocksdb::WriteOptions(), temp.as_string(), j_map.dump());
+                s = db->Put(rocksdb::WriteOptions(), temp.as_string(), j_hash.dump());
                 assert(s.ok());
+                // итерация по значениям в массиве json
+                for (json::iterator it = j_hash.begin(); it != j_hash.end(); ++it) {
+                    std::cout << it.key() << " : " << it.value() << "\n";
+                }
                 break;
             }
             case 4:
             {
-                
-                std::map<std::string, std::string> my_zset;
                 std::vector<cpp_redis::reply> zset_fields;
                 std::vector<std::string> zset_scores;
                 client.zrange(temp.as_string(), 0, -1, reply);
                 client.sync_commit();
                 zset_fields = answer.as_array();
+                json j_zset;
                 for(auto &zsed_temp : zset_fields){
                     client.zscore(temp.as_string() ,zsed_temp.as_string(), reply);
                     client.sync_commit();
-                    zset_scores.push_back(answer.as_string());
+                    j_zset[zsed_temp.as_string()] = answer.as_string();
                 }
-                for(std::size_t i = 0; i < zset_scores.size(); ++i){
-                    my_zset.insert(std::make_pair(zset_scores[i], zset_fields[i].as_string()));
-                }
-                json j_zset(my_zset);
                 s = db->Put(rocksdb::WriteOptions(), temp.as_string(), j_zset.dump());
                 assert(s.ok());
+                // итерация по значениям в массиве json
+                for (json::iterator it = j_zset.begin(); it != j_zset.end(); ++it) {
+                    std::cout << it.key() << " : " << it.value() << "\n";
+                }
                 break;
             }
             default: break;
         }
-    std::string value;
-    s = db->Get(rocksdb::ReadOptions(), temp.as_string(), &value);
-    assert(s.ok());
-    std::cout << std::endl << temp.as_string() << " : " << value << std::endl;
     }
+
+    rocksdb::Iterator* it = db->NewIterator(rocksdb::ReadOptions());
+    for (it->SeekToFirst(); it->Valid(); it->Next()) {
+        std::cout << it->key().ToString() << ": " << it->value().ToString() << std::endl;
+    }
+    assert(it->status().ok()); // Check for any errors found during the scan
+    delete it;
     
     delete db;
     return 0;
